@@ -52,6 +52,10 @@ impl ByteStream {
         self.error
     }
 
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
     pub fn available_capacity(&self) -> usize {
         self.capacity - self.buffer.len()
     }
