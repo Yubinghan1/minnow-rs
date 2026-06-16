@@ -2,7 +2,7 @@ use std::env;
 use std::io;
 
 use minnow_rs::ipv4_datagram::IPV4_PROTOCOL_TCP;
-use minnow_rs::tun::{TunDevice, DEFAULT_TUN_NAME};
+use minnow_rs::tun::{DEFAULT_TUN_NAME, TunDevice};
 
 fn main() -> io::Result<()> {
     let name = env::args()

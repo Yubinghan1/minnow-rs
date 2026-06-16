@@ -1,6 +1,9 @@
+pub mod arp;
 pub mod byte_stream;
 pub mod checksum;
+pub mod ethernet_frame;
 pub mod ipv4_datagram;
+pub mod network_interface;
 pub mod reassembler;
 pub mod tcp_connection;
 pub mod tcp_message;
