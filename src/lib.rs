@@ -1,6 +1,9 @@
 pub mod byte_stream;
+pub mod checksum;
+pub mod ipv4_datagram;
 pub mod reassembler;
 pub mod tcp_message;
 pub mod tcp_receiver;
+pub mod tcp_segment;
 pub mod tcp_sender;
 pub mod wrapping_integers;
