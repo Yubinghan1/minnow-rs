@@ -7,4 +7,5 @@ pub mod tcp_message;
 pub mod tcp_receiver;
 pub mod tcp_segment;
 pub mod tcp_sender;
+pub mod tun;
 pub mod wrapping_integers;
