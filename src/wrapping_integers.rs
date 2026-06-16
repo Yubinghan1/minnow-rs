@@ -1,52 +1,51 @@
-const MODULUS: u64=1_u64 << 32;
+const MODULUS: u64 = 1_u64 << 32;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Wrap32(u32);
 
-impl Wrap32{
-    pub const fn new(raw_value:u32)->Self{
+impl Wrap32 {
+    pub const fn new(raw_value: u32) -> Self {
         Self(raw_value)
     }
 
-    pub const fn raw_value(self)->u32{
+    pub const fn raw_value(self) -> u32 {
         self.0
     }
 
-    pub fn wrap(absolute_seqno:u64,zero_point:Self)->Self{
+    pub fn wrap(absolute_seqno: u64, zero_point: Self) -> Self {
         Self(zero_point.0.wrapping_add(absolute_seqno as u32))
     }
 
-    pub fn unwrap(self,zero_point:Self,checkpoint:u64)->u64{
-        let offset=self.0.wrapping_sub(zero_point.0) as u64;
+    pub fn unwrap(self, zero_point: Self, checkpoint: u64) -> u64 {
+        let offset = self.0.wrapping_sub(zero_point.0) as u64;
 
-        let era_start=checkpoint/MODULUS*MODULUS;
+        let era_start = checkpoint / MODULUS * MODULUS;
 
-        let current=era_start+offset;
-        
-        let mut best=current;
-        let mut best_distance=current.abs_diff(checkpoint);
+        let current = era_start + offset;
 
-        if let Some(previous)=current.checked_sub(MODULUS){
-            let distance=previous.abs_diff(checkpoint);
+        let mut best = current;
+        let mut best_distance = current.abs_diff(checkpoint);
 
-            if distance<best_distance{
-                best=previous;
-                best_distance=distance;
+        if let Some(previous) = current.checked_sub(MODULUS) {
+            let distance = previous.abs_diff(checkpoint);
+
+            if distance < best_distance {
+                best = previous;
+                best_distance = distance;
             }
         }
-        
-        if let Some(next)=current.checked_add(MODULUS){
-            let distance=next.abs_diff(checkpoint);
 
-            if distance<best_distance{
-                best=next;
-                best_distance=distance;
+        if let Some(next) = current.checked_add(MODULUS) {
+            let distance = next.abs_diff(checkpoint);
+
+            if distance < best_distance {
+                best = next;
+                best_distance = distance;
             }
         }
 
         best
     }
-    
 }
 
 #[cfg(test)]

@@ -5,14 +5,17 @@ use crate::tcp_message::{TcpReceiverMessage, TcpSenderMessage};
 use crate::wrapping_integers::Wrap32;
 
 #[derive(Debug)]
-pub struct TcpReceiver{
+pub struct TcpReceiver {
     reassembler: Reassembler,
-    isn:Option<Wrap32>,
+    isn: Option<Wrap32>,
 }
 
-impl TcpReceiver{
-    pub fn new(capacity:usize)-> Self{
-        Self { reassembler: Reassembler::new(capacity), isn: None }
+impl TcpReceiver {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            reassembler: Reassembler::new(capacity),
+            isn: None,
+        }
     }
 
     pub fn reassembler(&self) -> &Reassembler {
@@ -23,67 +26,59 @@ impl TcpReceiver{
         &mut self.reassembler
     }
 
-    pub fn output(&self)-> &crate::byte_stream::ByteStream{
+    pub fn output(&self) -> &crate::byte_stream::ByteStream {
         self.reassembler.output()
     }
 
-    pub fn output_mut(&mut self)-> &mut crate::byte_stream::ByteStream{
+    pub fn output_mut(&mut self) -> &mut crate::byte_stream::ByteStream {
         self.reassembler.output_mut()
     }
 
-    pub fn receive(&mut self, message:TcpSenderMessage)->Result<(), ReassemblerError>{
-        if message.rst{
+    pub fn receive(&mut self, message: TcpSenderMessage) -> Result<(), ReassemblerError> {
+        if message.rst {
             self.reassembler.output_mut().set_error();
-            return Ok(())
+            return Ok(());
         }
 
-        let isn=match self.isn{
-            Some(isn)=>{
-                if message.syn&&message.seqno!=isn{
-                    return Ok(())
+        let isn = match self.isn {
+            Some(isn) => {
+                if message.syn && message.seqno != isn {
+                    return Ok(());
                 }
                 isn
             }
-            None=>{
-                if !message.syn{
-                    return Ok(())
+            None => {
+                if !message.syn {
+                    return Ok(());
                 }
-                self.isn=Some(message.seqno);
+                self.isn = Some(message.seqno);
                 message.seqno
             }
         };
 
-        let checkpoint=self
-            .reassembler
-            .output()
-            .bytes_pushed()
-            .saturating_add(1);
+        let checkpoint = self.reassembler.output().bytes_pushed().saturating_add(1);
 
-        let absolute_seqno=message.seqno.unwrap(isn, checkpoint);
+        let absolute_seqno = message.seqno.unwrap(isn, checkpoint);
 
-        let stream_index=if message.syn{
+        let stream_index = if message.syn {
             absolute_seqno
-        }else{
-            let Some(index)=absolute_seqno.checked_sub(1) else{
+        } else {
+            let Some(index) = absolute_seqno.checked_sub(1) else {
                 return Ok(());
             };
             index
         };
 
-        self.reassembler.try_insert(stream_index, &message.payload, message.fin)?;
+        self.reassembler
+            .try_insert(stream_index, &message.payload, message.fin)?;
 
         Ok(())
-
     }
 
     pub fn send(&self) -> TcpReceiverMessage {
         let ackno = self.isn.map(|isn| {
             // SYN consumes one sequence number.
-            let mut absolute_ackno = self
-                .reassembler
-                .output()
-                .bytes_pushed()
-                .saturating_add(1);
+            let mut absolute_ackno = self.reassembler.output().bytes_pushed().saturating_add(1);
 
             // Once Reassembler has assembled through FIN, ByteStream is
             // closed and FIN consumes one additional sequence number.
@@ -94,8 +89,7 @@ impl TcpReceiver{
             Wrap32::wrap(absolute_ackno, isn)
         });
 
-        let available_capacity =
-            self.reassembler.output().available_capacity();
+        let available_capacity = self.reassembler.output().available_capacity();
 
         let window_size = min(available_capacity, u16::MAX as usize) as u16;
 
@@ -107,19 +101,13 @@ impl TcpReceiver{
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
 
     use super::*;
 
-    fn message(
-        seqno: u32,
-        syn: bool,
-        payload: &'static [u8],
-        fin: bool,
-    ) -> TcpSenderMessage {
+    fn message(seqno: u32, syn: bool, payload: &'static [u8], fin: bool) -> TcpSenderMessage {
         TcpSenderMessage {
             seqno: Wrap32::new(seqno),
             syn,
@@ -156,9 +144,7 @@ mod tests {
     fn syn_establishes_isn_and_advances_ack() {
         let mut receiver = TcpReceiver::new(10);
 
-        receiver
-            .receive(message(1_000, true, b"", false))
-            .unwrap();
+        receiver.receive(message(1_000, true, b"", false)).unwrap();
 
         assert_eq!(receiver.send().ackno, Some(Wrap32::new(1_001)));
         assert_eq!(receiver.send().window_size, 10);
@@ -181,9 +167,7 @@ mod tests {
     fn receiver_reassembles_out_of_order_payload() {
         let mut receiver = TcpReceiver::new(10);
 
-        receiver
-            .receive(message(1_000, true, b"", false))
-            .unwrap();
+        receiver.receive(message(1_000, true, b"", false)).unwrap();
 
         // Payload stream index 3 begins at absolute seqno 4,
         // which wraps to TCP seqno 1004.
@@ -229,9 +213,7 @@ mod tests {
     fn fin_waits_until_missing_prefix_arrives() {
         let mut receiver = TcpReceiver::new(10);
 
-        receiver
-            .receive(message(1_000, true, b"", false))
-            .unwrap();
+        receiver.receive(message(1_000, true, b"", false)).unwrap();
 
         receiver
             .receive(message(1_004, false, b"def", true))
@@ -294,9 +276,7 @@ mod tests {
         let isn = u32::MAX - 1;
         let mut receiver = TcpReceiver::new(10);
 
-        receiver
-            .receive(message(isn, true, b"cat", true))
-            .unwrap();
+        receiver.receive(message(isn, true, b"cat", true)).unwrap();
 
         assert_eq!(receiver.output().peek(), b"cat");
         assert!(receiver.output().is_closed());
@@ -314,9 +294,7 @@ mod tests {
     fn conflicting_retransmitted_syn_is_ignored() {
         let mut receiver = TcpReceiver::new(10);
 
-        receiver
-            .receive(message(1_000, true, b"", false))
-            .unwrap();
+        receiver.receive(message(1_000, true, b"", false)).unwrap();
 
         receiver
             .receive(message(2_000, true, b"abc", false))
