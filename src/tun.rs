@@ -1,6 +1,5 @@
 #[cfg(target_os = "linux")]
 mod linux {
-    use std::ffi::CString;
     use std::fs::{File, OpenOptions};
     use std::io::{self, Read, Write};
     use std::os::fd::{AsRawFd, RawFd};
