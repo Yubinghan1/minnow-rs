@@ -70,7 +70,7 @@ impl TcpReceiver {
         };
 
         self.reassembler
-            .try_insert(stream_index, &message.payload, message.fin)?;
+            .try_insert(stream_index, message.payload, message.fin)?;
 
         Ok(())
     }
@@ -103,7 +103,7 @@ impl TcpReceiver {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
+    use bytes::{Bytes, BytesMut};
 
     use super::*;
 
@@ -115,6 +115,16 @@ mod tests {
             fin,
             rst: false,
         }
+    }
+
+    fn buffered_bytes(stream: &crate::byte_stream::ByteStream) -> Bytes {
+        let mut out = BytesMut::with_capacity(stream.bytes_buffered());
+
+        for chunk in stream.chunks() {
+            out.extend_from_slice(chunk);
+        }
+
+        out.freeze()
     }
 
     #[test]
@@ -158,7 +168,10 @@ mod tests {
             .receive(message(1_000, true, b"abc", false))
             .unwrap();
 
-        assert_eq!(receiver.output().peek(), b"abc");
+        assert_eq!(
+            buffered_bytes(receiver.output()),
+            Bytes::from_static(b"abc")
+        );
         assert_eq!(receiver.send().ackno, Some(Wrap32::new(1_004)));
         assert_eq!(receiver.send().window_size, 7);
     }
@@ -183,7 +196,10 @@ mod tests {
             .receive(message(1_001, false, b"abc", false))
             .unwrap();
 
-        assert_eq!(receiver.output().peek(), b"abcdef");
+        assert_eq!(
+            buffered_bytes(receiver.output()),
+            Bytes::from_static(b"abcdef")
+        );
         assert_eq!(receiver.reassembler().bytes_pending(), 0);
         assert_eq!(receiver.send().ackno, Some(Wrap32::new(1_007)));
     }
@@ -200,7 +216,10 @@ mod tests {
             .receive(message(1_004, false, b"de", true))
             .unwrap();
 
-        assert_eq!(receiver.output().peek(), b"abcde");
+        assert_eq!(
+            buffered_bytes(receiver.output()),
+            Bytes::from_static(b"abcde")
+        );
         assert!(receiver.output().is_closed());
 
         // SYN + five payload bytes + FIN:
@@ -227,7 +246,10 @@ mod tests {
             .unwrap();
 
         assert!(receiver.output().is_closed());
-        assert_eq!(receiver.output().peek(), b"abcdef");
+        assert_eq!(
+            buffered_bytes(receiver.output()),
+            Bytes::from_static(b"abcdef")
+        );
         assert_eq!(receiver.send().ackno, Some(Wrap32::new(1_008)));
     }
 
@@ -278,7 +300,10 @@ mod tests {
 
         receiver.receive(message(isn, true, b"cat", true)).unwrap();
 
-        assert_eq!(receiver.output().peek(), b"cat");
+        assert_eq!(
+            buffered_bytes(receiver.output()),
+            Bytes::from_static(b"cat")
+        );
         assert!(receiver.output().is_closed());
 
         // SYN  -> u32::MAX - 1

@@ -84,7 +84,7 @@ impl Reassembler {
         reassembler
     }
 
-    pub fn insert(&mut self, first_index: u64, data: &[u8], is_last_substring: bool) {
+    pub fn insert(&mut self, first_index: u64, data: Bytes, is_last_substring: bool) {
         self.try_insert(first_index, data, is_last_substring)
             .expect("incoming fragment is inconsistent with the byte stream");
     }
@@ -92,7 +92,7 @@ impl Reassembler {
     pub fn try_insert(
         &mut self,
         first_index: u64,
-        data: &[u8],
+        data: Bytes,
         is_last_substring: bool,
     ) -> Result<(), ReassemblerError> {
         let data_len = u64::try_from(data.len()).map_err(|_| ReassemblerError::IndexOverflow)?;
@@ -130,12 +130,12 @@ impl Reassembler {
             let data_end =
                 usize::try_from(clipped_end - first_index).expect("clipped end must fit in usize");
 
-            let clipped_data = &data[data_start..data_end];
+            let clipped_data = data.slice(data_start..data_end);
 
             if clipped_start == self.output.bytes_pushed() {
                 self.output.push(clipped_data);
             } else {
-                self.insert_missing_gaps(clipped_start, clipped_data);
+                self.insert_missing_gaps(clipped_start, &clipped_data);
             }
             self.flush_contiguous();
         }
@@ -158,7 +158,7 @@ impl Reassembler {
         &mut self.output
     }
 
-    fn insert_missing_gaps(&mut self, start: u64, data: &[u8]) {
+    fn insert_missing_gaps(&mut self, start: u64, data: &Bytes) {
         if data.is_empty() {
             return;
         }
@@ -208,7 +208,7 @@ impl Reassembler {
     fn insert_gap(
         &mut self,
         original_start: u64,
-        original_data: &[u8],
+        original_data: &Bytes,
         gap_start: u64,
         gap_end: u64,
     ) {
@@ -222,7 +222,7 @@ impl Reassembler {
         let slice_end =
             usize::try_from(gap_end - original_start).expect("gap end must fit in usize");
 
-        let gap = Bytes::copy_from_slice(&original_data[slice_start..slice_end]);
+        let gap = original_data.slice(slice_start..slice_end);
 
         let previous = self.pending.insert(gap_start, gap);
 
@@ -256,7 +256,7 @@ impl Reassembler {
                 .remove(&start)
                 .expect("first pending fragment must exist");
 
-            let accepted = self.output.push(&data);
+            let accepted = self.output.push(data.clone());
 
             debug_assert!(
                 accepted <= data.len(),
@@ -406,15 +406,30 @@ impl Reassembler {
 
 #[cfg(test)]
 mod tests {
+    use bytes::BytesMut;
+
     use super::*;
+
+    fn buffered_bytes(stream: &ByteStream) -> Bytes {
+        let mut out = BytesMut::with_capacity(stream.bytes_buffered());
+
+        for chunk in stream.chunks() {
+            out.extend_from_slice(chunk);
+        }
+
+        out.freeze()
+    }
 
     #[test]
     fn ordered_insert_is_written_immediately() {
         let mut reassembler = Reassembler::new(10);
 
-        reassembler.insert(0, b"abc", false);
+        reassembler.insert(0, Bytes::from_static(b"abc"), false);
 
-        assert_eq!(reassembler.output().peek(), b"abc");
+        assert_eq!(
+            buffered_bytes(reassembler.output()),
+            Bytes::from_static(b"abc")
+        );
         assert_eq!(reassembler.output().bytes_pushed(), 3);
         assert_eq!(reassembler.bytes_pending(), 0);
     }
@@ -423,14 +438,17 @@ mod tests {
     fn out_of_order_insert_waits_for_missing_prefix() {
         let mut reassembler = Reassembler::new(10);
 
-        reassembler.insert(3, b"def", false);
+        reassembler.insert(3, Bytes::from_static(b"def"), false);
 
         assert_eq!(reassembler.output().bytes_buffered(), 0);
         assert_eq!(reassembler.bytes_pending(), 3);
 
-        reassembler.insert(0, b"abc", false);
+        reassembler.insert(0, Bytes::from_static(b"abc"), false);
 
-        assert_eq!(reassembler.output().peek(), b"abcdef");
+        assert_eq!(
+            buffered_bytes(reassembler.output()),
+            Bytes::from_static(b"abcdef")
+        );
         assert_eq!(reassembler.output().bytes_pushed(), 6);
         assert_eq!(reassembler.bytes_pending(), 0);
     }
@@ -439,8 +457,8 @@ mod tests {
     fn duplicate_segment_is_stored_once() {
         let mut reassembler = Reassembler::new(10);
 
-        reassembler.insert(3, b"def", false);
-        reassembler.insert(3, b"def", false);
+        reassembler.insert(3, Bytes::from_static(b"def"), false);
+        reassembler.insert(3, Bytes::from_static(b"def"), false);
 
         assert_eq!(reassembler.bytes_pending(), 3);
     }
@@ -449,14 +467,17 @@ mod tests {
     fn overlapping_insert_keeps_only_missing_ranges() {
         let mut reassembler = Reassembler::new(20);
 
-        reassembler.insert(4, b"ef", false);
-        reassembler.insert(2, b"cdefgh", false);
+        reassembler.insert(4, Bytes::from_static(b"ef"), false);
+        reassembler.insert(2, Bytes::from_static(b"cdefgh"), false);
 
         assert_eq!(reassembler.bytes_pending(), 6);
 
-        reassembler.insert(0, b"ab", false);
+        reassembler.insert(0, Bytes::from_static(b"ab"), false);
 
-        assert_eq!(reassembler.output().peek(), b"abcdefgh");
+        assert_eq!(
+            buffered_bytes(reassembler.output()),
+            Bytes::from_static(b"abcdefgh")
+        );
         assert_eq!(reassembler.bytes_pending(), 0);
     }
 
@@ -464,14 +485,17 @@ mod tests {
     fn adjacent_segments_flush_in_order() {
         let mut reassembler = Reassembler::new(20);
 
-        reassembler.insert(5, b"fgh", false);
-        reassembler.insert(8, b"ijk", false);
+        reassembler.insert(5, Bytes::from_static(b"fgh"), false);
+        reassembler.insert(8, Bytes::from_static(b"ijk"), false);
 
         assert_eq!(reassembler.bytes_pending(), 6);
 
-        reassembler.insert(0, b"abcde", false);
+        reassembler.insert(0, Bytes::from_static(b"abcde"), false);
 
-        assert_eq!(reassembler.output().peek(), b"abcdefghijk");
+        assert_eq!(
+            buffered_bytes(reassembler.output()),
+            Bytes::from_static(b"abcdefghijk")
+        );
         assert_eq!(reassembler.bytes_pending(), 0);
     }
 
@@ -479,10 +503,13 @@ mod tests {
     fn earlier_already_assembled_bytes_are_discarded() {
         let mut reassembler = Reassembler::new(10);
 
-        reassembler.insert(0, b"abcd", false);
-        reassembler.insert(0, b"abcdef", false);
+        reassembler.insert(0, Bytes::from_static(b"abcd"), false);
+        reassembler.insert(0, Bytes::from_static(b"abcdef"), false);
 
-        assert_eq!(reassembler.output().peek(), b"abcdef");
+        assert_eq!(
+            buffered_bytes(reassembler.output()),
+            Bytes::from_static(b"abcdef")
+        );
         assert_eq!(reassembler.output().bytes_pushed(), 6);
         assert_eq!(reassembler.bytes_pending(), 0);
     }
@@ -491,9 +518,12 @@ mod tests {
     fn bytes_beyond_capacity_window_are_discarded() {
         let mut reassembler = Reassembler::new(5);
 
-        reassembler.insert(0, b"abcdefghij", false);
+        reassembler.insert(0, Bytes::from_static(b"abcdefghij"), false);
 
-        assert_eq!(reassembler.output().peek(), b"abcde");
+        assert_eq!(
+            buffered_bytes(reassembler.output()),
+            Bytes::from_static(b"abcde")
+        );
         assert_eq!(reassembler.output().bytes_pushed(), 5);
         assert_eq!(reassembler.bytes_pending(), 0);
     }
@@ -502,7 +532,7 @@ mod tests {
     fn future_bytes_beyond_window_are_not_saved() {
         let mut reassembler = Reassembler::new(5);
 
-        reassembler.insert(100, b"xyz", false);
+        reassembler.insert(100, Bytes::from_static(b"xyz"), false);
 
         assert_eq!(reassembler.output().bytes_buffered(), 0);
         assert_eq!(reassembler.bytes_pending(), 0);
@@ -512,9 +542,9 @@ mod tests {
     fn reader_pop_advances_the_acceptable_window() {
         let mut reassembler = Reassembler::new(5);
 
-        reassembler.insert(0, b"abcde", false);
+        reassembler.insert(0, Bytes::from_static(b"abcde"), false);
         reassembler.output_mut().pop(3);
-        reassembler.insert(5, b"fgh", false);
+        reassembler.insert(5, Bytes::from_static(b"fgh"), false);
 
         assert_eq!(reassembler.output().bytes_pushed(), 8);
         assert_eq!(reassembler.output().bytes_popped(), 3);
@@ -525,17 +555,22 @@ mod tests {
     fn final_substring_closes_output_after_complete_assembly() {
         let mut reassembler = Reassembler::new(10);
 
-        reassembler.insert(3, b"def", true);
+        reassembler.insert(3, Bytes::from_static(b"def"), true);
 
         assert!(!reassembler.output().is_closed());
 
-        reassembler.insert(0, b"abc", false);
+        reassembler.insert(0, Bytes::from_static(b"abc"), false);
 
-        assert_eq!(reassembler.output().peek(), b"abcdef");
+        assert_eq!(
+            buffered_bytes(reassembler.output()),
+            Bytes::from_static(b"abcdef")
+        );
         assert!(reassembler.output().is_closed());
         assert!(!reassembler.output().is_finished());
 
-        reassembler.output_mut().pop(6);
+        while reassembler.output().bytes_buffered() > 0 {
+            reassembler.output_mut().pop(usize::MAX);
+        }
 
         assert!(reassembler.output().is_finished());
     }
@@ -544,7 +579,7 @@ mod tests {
     fn empty_final_segment_can_close_an_empty_stream() {
         let mut reassembler = Reassembler::new(10);
 
-        reassembler.insert(0, b"", true);
+        reassembler.insert(0, Bytes::from_static(b""), true);
 
         assert!(reassembler.output().is_closed());
         assert!(reassembler.output().is_finished());
@@ -554,7 +589,7 @@ mod tests {
     fn zero_capacity_discards_everything() {
         let mut reassembler = Reassembler::new(0);
 
-        reassembler.insert(0, b"abc", false);
+        reassembler.insert(0, Bytes::from_static(b"abc"), false);
 
         assert_eq!(reassembler.output().bytes_pushed(), 0);
         assert_eq!(reassembler.bytes_pending(), 0);
@@ -564,14 +599,14 @@ mod tests {
     fn segment_is_clipped_on_both_sides() {
         let mut reassembler = Reassembler::new(5);
 
-        reassembler.insert(0, b"abc", false);
+        reassembler.insert(0, Bytes::from_static(b"abc"), false);
         reassembler.output_mut().pop(2);
 
         // Current acceptable window: [2, 7)
         // Already assembled: [0, 3)
         // New fragment: [1, 9)
         // Newly useful bytes: [3, 7)
-        reassembler.insert(1, b"bcdefghi", false);
+        reassembler.insert(1, Bytes::from_static(b"bcdefghi"), false);
 
         assert_eq!(reassembler.output().bytes_pushed(), 7);
         assert_eq!(reassembler.output().bytes_buffered(), 5);
@@ -583,10 +618,13 @@ mod tests {
 
         for index in (0..10).rev() {
             let byte = [b'a' + index as u8];
-            reassembler.insert(index, &byte, false);
+            reassembler.insert(index, Bytes::copy_from_slice(&byte), false);
         }
 
-        assert_eq!(reassembler.output().peek(), b"abcdefghij");
+        assert_eq!(
+            buffered_bytes(reassembler.output()),
+            Bytes::from_static(b"abcdefghij")
+        );
         assert_eq!(reassembler.bytes_pending(), 0);
     }
 
@@ -594,16 +632,19 @@ mod tests {
     fn combined_storage_never_exceeds_capacity() {
         let mut reassembler = Reassembler::new(10);
 
-        reassembler.insert(5, b"fghij", false);
+        reassembler.insert(5, Bytes::from_static(b"fghij"), false);
 
         assert!(
             reassembler.output().bytes_buffered() + reassembler.bytes_pending()
                 <= reassembler.output().capacity()
         );
 
-        reassembler.insert(0, b"abcdefghij", false);
+        reassembler.insert(0, Bytes::from_static(b"abcdefghij"), false);
 
-        assert_eq!(reassembler.output().peek(), b"abcdefghij");
+        assert_eq!(
+            buffered_bytes(reassembler.output()),
+            Bytes::from_static(b"abcdefghij")
+        );
         assert_eq!(reassembler.bytes_pending(), 0);
 
         assert!(
@@ -616,10 +657,14 @@ mod tests {
     fn inconsistent_eof_is_rejected() {
         let mut reassembler = Reassembler::new(10);
 
-        assert!(reassembler.try_insert(3, b"def", true).is_ok());
+        assert!(
+            reassembler
+                .try_insert(3, Bytes::from_static(b"def"), true)
+                .is_ok()
+        );
 
         let error = reassembler
-            .try_insert(4, b"def", true)
+            .try_insert(4, Bytes::from_static(b"def"), true)
             .expect_err("conflicting EOF must be rejected");
 
         assert_eq!(
@@ -635,10 +680,14 @@ mod tests {
     fn bytes_beyond_known_eof_are_rejected() {
         let mut reassembler = Reassembler::new(10);
 
-        assert!(reassembler.try_insert(3, b"def", true).is_ok());
+        assert!(
+            reassembler
+                .try_insert(3, Bytes::from_static(b"def"), true)
+                .is_ok()
+        );
 
         let error = reassembler
-            .try_insert(5, b"fg", false)
+            .try_insert(5, Bytes::from_static(b"fg"), false)
             .expect_err("bytes beyond EOF must be rejected");
 
         assert_eq!(

@@ -1,7 +1,7 @@
 use std::cmp::min;
 use std::collections::VecDeque;
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 
 use crate::byte_stream::ByteStream;
 use crate::tcp_message::{TcpReceiverMessage, TcpSenderMessage};
@@ -483,36 +483,14 @@ impl TcpSender {
             .min(self.config.max_timer_interval_ms)
     }
 
-    /// Move application bytes out of ByteStream into one owned segment
-    /// payload.
-    ///
-    /// One copy is unavoidable with the current ByteStream API: after data is
-    /// popped, the segment still needs to own its payload for retransmission.
-    ///
-    /// Retransmissions and partial ACK trimming do not copy this allocation.
+    /// Move application bytes out of ByteStream into one segment payload.
     fn read_outbound_payload(&mut self, max_len: usize) -> Bytes {
         if max_len == 0 {
             return Bytes::new();
         }
 
         let target_len = min(max_len, self.outbound.bytes_buffered());
-
-        let mut payload = BytesMut::with_capacity(target_len);
-
-        while payload.len() < target_len {
-            let available = self.outbound.peek();
-
-            if available.is_empty() {
-                break;
-            }
-
-            let take = min(available.len(), target_len - payload.len());
-
-            payload.extend_from_slice(&available[..take]);
-            self.outbound.pop(take);
-        }
-
-        payload.freeze()
+        self.outbound.pop(target_len)
     }
 
     fn track_and_transmit<F>(&mut self, message: TcpSenderMessage, transmit: &mut F)
@@ -555,12 +533,12 @@ impl TcpSender {
             self.outstanding.pop_front();
         }
 
-        if let Some(front) = self.outstanding.front_mut() {
-            if front.absolute_start < self.snd_una {
-                let acknowledged_prefix = self.snd_una - front.absolute_start;
+        if let Some(front) = self.outstanding.front_mut()
+            && front.absolute_start < self.snd_una
+        {
+            let acknowledged_prefix = self.snd_una - front.absolute_start;
 
-                front.trim_prefix(acknowledged_prefix, self.isn);
-            }
+            front.trim_prefix(acknowledged_prefix, self.isn);
         }
     }
 
@@ -719,7 +697,7 @@ mod tests {
         sender.push(|message| sent.push(message));
         sender.receive(receiver_message(Some(1_001), 8));
 
-        assert_eq!(sender.outbound_mut().push(b"abcdef"), 6);
+        assert_eq!(sender.outbound_mut().push(Bytes::from_static(b"abcdef")), 6);
         sender.outbound_mut().close();
 
         sent.clear();
@@ -750,7 +728,7 @@ mod tests {
         sender.push(|message| sent.push(message));
         sender.receive(receiver_message(Some(1_001), 4));
 
-        sender.outbound_mut().push(b"abcd");
+        sender.outbound_mut().push(Bytes::from_static(b"abcd"));
         sender.outbound_mut().close();
 
         sent.clear();
@@ -781,7 +759,7 @@ mod tests {
         sender.push(|message| sent.push(message));
         sender.receive(receiver_message(Some(1_001), 8));
 
-        sender.outbound_mut().push(b"abcdef");
+        sender.outbound_mut().push(Bytes::from_static(b"abcdef"));
         sender.outbound_mut().close();
 
         sender.push(|message| sent.push(message));
@@ -813,7 +791,7 @@ mod tests {
             },
         );
 
-        sender.outbound_mut().push(b"abc");
+        sender.outbound_mut().push(Bytes::from_static(b"abc"));
 
         let mut sent = Vec::new();
         sender.receive(receiver_message(None, 10));
@@ -949,7 +927,7 @@ mod tests {
 
         sender.receive(receiver_message(Some(1_001), 0));
 
-        sender.outbound_mut().push(b"ABC");
+        sender.outbound_mut().push(Bytes::from_static(b"ABC"));
 
         sent.clear();
         sender.push(|message| sent.push(message));
@@ -981,7 +959,7 @@ mod tests {
         sender.push(|message| sent.push(message));
         sender.receive(receiver_message(Some(1_001), 0));
 
-        sender.outbound_mut().push(b"ABC");
+        sender.outbound_mut().push(Bytes::from_static(b"ABC"));
 
         sent.clear();
         sender.push(|message| sent.push(message));
@@ -1007,7 +985,7 @@ mod tests {
         sender.push(|message| sent.push(message));
         sender.receive(receiver_message(Some(1_001), 5));
 
-        sender.outbound_mut().push(b"ABCDE");
+        sender.outbound_mut().push(Bytes::from_static(b"ABCDE"));
 
         sent.clear();
         sender.push(|message| sent.push(message));
@@ -1085,7 +1063,7 @@ mod tests {
             rst: false,
         });
 
-        sender.outbound_mut().push(b"cat");
+        sender.outbound_mut().push(Bytes::from_static(b"cat"));
         sender.outbound_mut().close();
 
         sent.clear();

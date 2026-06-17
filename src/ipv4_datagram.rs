@@ -1,9 +1,46 @@
 use bytes::{BufMut, Bytes, BytesMut};
+use zerocopy::byteorder::network_endian::U16;
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
 use crate::checksum::{internet_checksum, verify_internet_checksum};
 
 pub const IPV4_HEADER_MIN_LEN: usize = 20;
+pub const IPV4_PROTOCOL_ICMP: u8 = 1;
 pub const IPV4_PROTOCOL_TCP: u8 = 6;
+
+#[derive(Debug, Clone, Copy, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
+#[repr(C)]
+struct Ipv4FixedHeader {
+    version_ihl: u8,
+    dscp_ecn: u8,
+    total_len: U16,
+    identification: U16,
+    flags_fragment_offset: U16,
+    ttl: u8,
+    protocol: u8,
+    checksum: U16,
+    src: [u8; 4],
+    dst: [u8; 4],
+}
+
+impl Ipv4FixedHeader {
+    fn view(packet: &[u8]) -> Result<&Self, Ipv4ParseError> {
+        if packet.len() < IPV4_HEADER_MIN_LEN {
+            return Err(Ipv4ParseError::PacketTooShort);
+        }
+
+        Self::ref_from_bytes(&packet[..IPV4_HEADER_MIN_LEN])
+            .map_err(|_| Ipv4ParseError::PacketTooShort)
+    }
+
+    fn version(self) -> u8 {
+        self.version_ihl >> 4
+    }
+
+    fn ihl(self) -> u8 {
+        self.version_ihl & 0x0f
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Ipv4AddrBytes(pub [u8; 4]);
@@ -35,15 +72,19 @@ pub struct Ipv4Header {
 }
 
 impl Ipv4Header {
-    pub fn new_tcp(src: [u8; 4], dst: [u8; 4]) -> Self {
+    pub fn new(src: [u8; 4], dst: [u8; 4], protocol: u8) -> Self {
         Self {
             src: Ipv4AddrBytes::new(src),
             dst: Ipv4AddrBytes::new(dst),
             ttl: 64,
-            protocol: IPV4_PROTOCOL_TCP,
+            protocol,
             identification: 0,
             flags_fragment_offset: 0x4000, // don't fragment
         }
+    }
+
+    pub fn new_tcp(src: [u8; 4], dst: [u8; 4]) -> Self {
+        Self::new(src, dst, IPV4_PROTOCOL_TCP)
     }
 }
 
@@ -63,11 +104,19 @@ pub enum Ipv4ParseError {
 }
 
 impl Ipv4Datagram {
-    pub fn new_tcp(src: [u8; 4], dst: [u8; 4], payload: Bytes) -> Self {
+    pub fn new(src: [u8; 4], dst: [u8; 4], protocol: u8, payload: Bytes) -> Self {
         Self {
-            header: Ipv4Header::new_tcp(src, dst),
+            header: Ipv4Header::new(src, dst, protocol),
             payload,
         }
+    }
+
+    pub fn new_tcp(src: [u8; 4], dst: [u8; 4], payload: Bytes) -> Self {
+        Self::new(src, dst, IPV4_PROTOCOL_TCP, payload)
+    }
+
+    pub fn new_icmp(src: [u8; 4], dst: [u8; 4], payload: Bytes) -> Self {
+        Self::new(src, dst, IPV4_PROTOCOL_ICMP, payload)
     }
 
     pub fn serialize(&self) -> Bytes {
@@ -116,12 +165,9 @@ impl Ipv4Datagram {
     }
 
     pub fn parse_bytes(packet: Bytes) -> Result<Self, Ipv4ParseError> {
-        if packet.len() < IPV4_HEADER_MIN_LEN {
-            return Err(Ipv4ParseError::PacketTooShort);
-        }
-
-        let version = packet[0] >> 4;
-        let ihl = packet[0] & 0x0f;
+        let fixed = *Ipv4FixedHeader::view(&packet)?;
+        let version = fixed.version();
+        let ihl = fixed.ihl();
 
         if version != 4 {
             return Err(Ipv4ParseError::NotIpv4);
@@ -133,7 +179,7 @@ impl Ipv4Datagram {
             return Err(Ipv4ParseError::InvalidHeaderLength);
         }
 
-        let total_len = u16::from_be_bytes([packet[2], packet[3]]) as usize;
+        let total_len = fixed.total_len.get() as usize;
 
         if total_len < header_len || total_len > packet.len() {
             return Err(Ipv4ParseError::InvalidTotalLength);
@@ -144,12 +190,12 @@ impl Ipv4Datagram {
         }
 
         let header = Ipv4Header {
-            identification: u16::from_be_bytes([packet[4], packet[5]]),
-            flags_fragment_offset: u16::from_be_bytes([packet[6], packet[7]]),
-            ttl: packet[8],
-            protocol: packet[9],
-            src: Ipv4AddrBytes::new([packet[12], packet[13], packet[14], packet[15]]),
-            dst: Ipv4AddrBytes::new([packet[16], packet[17], packet[18], packet[19]]),
+            identification: fixed.identification.get(),
+            flags_fragment_offset: fixed.flags_fragment_offset.get(),
+            ttl: fixed.ttl,
+            protocol: fixed.protocol,
+            src: Ipv4AddrBytes::new(fixed.src),
+            dst: Ipv4AddrBytes::new(fixed.dst),
         };
 
         let payload = packet.slice(header_len..total_len);

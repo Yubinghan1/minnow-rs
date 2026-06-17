@@ -206,9 +206,7 @@ impl ArpMessage {
 }
 
 #[cfg(test)]
-
 mod tests {
-
     use super::*;
 
     fn mac_a() -> EthernetAddress {

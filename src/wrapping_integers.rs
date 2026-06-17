@@ -40,7 +40,6 @@ impl Wrap32 {
 
             if distance < best_distance {
                 best = next;
-                best_distance = distance;
             }
         }
 

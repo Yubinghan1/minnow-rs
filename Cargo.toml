@@ -2,7 +2,9 @@
 name = "minnow-rs"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 bytes = "1.11.1"
-libc="0.2"
+libc = "0.2"
+zerocopy = { version = "0.8.52", features = ["derive"] }
