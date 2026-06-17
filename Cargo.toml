@@ -2,7 +2,13 @@
 name = "minnow-rs"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.96"
+description = "A CS144-inspired user-space TCP/IP stack in Rust with TUN/TAP demos and pcap tracing."
 license = "MIT"
+repository = "https://github.com/Yubinghan1/minnow-rs"
+readme = "README.md"
+keywords = ["tcp", "ip", "tun", "tap", "cs144"]
+categories = ["network-programming", "command-line-utilities"]
 
 [dependencies]
 bytes = "1.11.1"
